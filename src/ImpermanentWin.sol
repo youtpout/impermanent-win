@@ -52,6 +52,9 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
     int256 internal constant MAX_INT = type(int256).max;
     uint16 internal constant MINIMUM_LIQUIDITY = 1000;
 
+    mapping(PoolId => uint256) simulateReserve0;
+    mapping(PoolId => uint256) simulateReserve1;
+
     struct CallbackData {
         address sender;
         PoolKey key;
@@ -61,6 +64,16 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
     struct PoolInfo {
         bool hasAccruedFees;
         address liquidityToken;
+    }
+
+    struct ReserveInfo {
+        uint128 simulate0;
+        uint128 simulate1;
+        uint128 priceAvg0;
+        uint128 priceAvg1;
+        uint40 priceAvgTimestamp;
+        uint104 fee0;
+        uint104 fee1;
     }
 
     struct AddLiquidityParams {
@@ -84,6 +97,7 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
     }
 
     mapping(PoolId => PoolInfo) public poolInfo;
+    mapping(PoolId => ReserveInfo) public reserveInfo;
 
     constructor(IPoolManager _manager) BaseHook(_manager) {}
 
