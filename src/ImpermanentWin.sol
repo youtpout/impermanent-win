@@ -24,9 +24,9 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {IUnlockCallback} from "v4-core/src/interfaces/callback/IUnlockCallback.sol";
-import  {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 
-contract ImpermanentWin is BaseHook, IUnlockCallback  {
+contract ImpermanentWin is BaseHook, IUnlockCallback {
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
     using PoolIdLibrary for PoolKey;
@@ -85,7 +85,7 @@ contract ImpermanentWin is BaseHook, IUnlockCallback  {
 
     mapping(PoolId => PoolInfo) public poolInfo;
 
-    constructor(IPoolManager _manager) BaseHook(_manager)  {}
+    constructor(IPoolManager _manager) BaseHook(_manager) {}
 
     modifier ensure(uint256 deadline) {
         if (deadline < block.timestamp) revert ExpiredPastDeadline();
@@ -203,11 +203,7 @@ contract ImpermanentWin is BaseHook, IUnlockCallback  {
         erc20.burn(msg.sender, params.liquidity);
     }
 
-    function _beforeInitialize(address, PoolKey calldata key, uint160)
-        internal
-        override
-        returns (bytes4)
-    {
+    function _beforeInitialize(address, PoolKey calldata key, uint160) internal override returns (bytes4) {
         if (key.tickSpacing != 60) revert TickSpacingNotDefault();
 
         PoolId poolId = key.toId();
