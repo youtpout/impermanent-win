@@ -25,6 +25,7 @@ import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeSwapDelta.sol";
 import {IUnlockCallback} from "v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {toBeforeSwapDelta, BeforeSwapDelta} from "v4-core/src/types/BeforeSwapDelta.sol";
 
 contract ImpermanentWin is BaseHook, IUnlockCallback {
     using CurrencyLibrary for Currency;
@@ -251,19 +252,66 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
         return BaseHook.beforeAddLiquidity.selector;
     }
 
-    function _beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         PoolId poolId = key.toId();
 
+        bool exactInput = params.amountSpecified < 0;
+        (Currency specified, Currency unspecified) =
+            (params.zeroForOne == exactInput) ? (key.currency0, key.currency1) : (key.currency1, key.currency0);
+
+        uint256 specifiedAmount = exactInput ? uint256(-params.amountSpecified) : uint256(params.amountSpecified);
+        uint256 unspecifiedAmount;
+
+        // xustom vurve to replace by our code
+        BeforeSwapDelta returnDelta;
+        if (exactInput) {
+            // in exact-input swaps, the specified token is a debt that gets paid down by the swapper
+            // the unspecified token is credited to the PoolManager, that is claimed by the swapper
+            unspecifiedAmount = getAmountOutFromExactInput(specifiedAmount, specified, unspecified, params.zeroForOne);
+            specified.take(poolManager, address(this), specifiedAmount, true);
+            unspecified.settle(poolManager, address(this), unspecifiedAmount, true);
+
+            returnDelta = toBeforeSwapDelta(specifiedAmount.toInt128(), -unspecifiedAmount.toInt128());
+        } else {
+            // exactOutput
+            // in exact-output swaps, the unspecified token is a debt that gets paid down by the swapper
+            // the specified token is credited to the PoolManager, that is claimed by the swapper
+            unspecifiedAmount = getAmountInForExactOutput(specifiedAmount, unspecified, specified, params.zeroForOne);
+            unspecified.take(poolManager, address(this), unspecifiedAmount, true);
+            specified.settle(poolManager, address(this), specifiedAmount, true);
+
+            returnDelta = toBeforeSwapDelta(-specifiedAmount.toInt128(), unspecifiedAmount.toInt128());
+        }
+
         if (!poolInfo[poolId].hasAccruedFees) {
             PoolInfo storage pool = poolInfo[poolId];
             pool.hasAccruedFees = true;
         }
 
-        return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        return (IHooks.beforeSwap.selector, returnDelta, 0);
+    }
+
+    
+    function getAmountOutFromExactInput(uint256 amountIn, Currency, Currency, bool)
+        internal
+        pure        
+        returns (uint256 amountOut)
+    {
+        // in constant-sum curve, tokens trade exactly 1:1
+        amountOut = amountIn;
+    }
+
+    function getAmountInForExactOutput(uint256 amountOut, Currency, Currency, bool)
+        internal
+        pure        
+        returns (uint256 amountIn)
+    {
+        // in constant-sum curve, tokens trade exactly 1:1
+        amountIn = amountOut;
     }
 
     function modifyLiquidity(PoolKey memory key, IPoolManager.ModifyLiquidityParams memory params)
