@@ -26,6 +26,7 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/src/types/BeforeS
 import {IUnlockCallback} from "v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {toBeforeSwapDelta, BeforeSwapDelta} from "v4-core/src/types/BeforeSwapDelta.sol";
+import {TransientStateLibrary} from "v4-core/src/libraries/TransientStateLibrary.sol";
 
 contract ImpermanentWin is BaseHook, IUnlockCallback {
     using CurrencyLibrary for Currency;
@@ -34,6 +35,7 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
     using SafeCast for uint256;
     using SafeCast for uint128;
     using StateLibrary for IPoolManager;
+    using TransientStateLibrary for IPoolManager;
 
     /// @notice Thrown when trying to interact with a non-initialized pool
     error PoolNotInitialized();
@@ -56,6 +58,18 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
     mapping(PoolId => uint256) simulateReserve0;
     mapping(PoolId => uint256) simulateReserve1;
 
+    struct ImpermanentSwapParams {
+        int256 amountCalculated;
+        uint256 fictiveReserveIn;
+        uint256 fictiveReserveOut;
+        uint256 priceAverageIn;
+        uint256 priceAverageOut;
+        address token0;
+        address token1;
+        uint256 balanceIn;
+        uint256 balanceOut;
+    }
+
     struct CallbackData {
         address sender;
         PoolKey key;
@@ -68,8 +82,8 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
     }
 
     struct ReserveInfo {
-        uint128 simulate0;
-        uint128 simulate1;
+        uint128 simulateReserve0;
+        uint128 simulateReserve1;
         uint128 priceAvg0;
         uint128 priceAvg1;
         uint40 priceAvgTimestamp;
@@ -271,7 +285,8 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
         if (exactInput) {
             // in exact-input swaps, the specified token is a debt that gets paid down by the swapper
             // the unspecified token is credited to the PoolManager, that is claimed by the swapper
-            unspecifiedAmount = getAmountOutFromExactInput(specifiedAmount, specified, unspecified, params.zeroForOne);
+            unspecifiedAmount =
+                getAmountOutFromExactInput(specifiedAmount, poolId, specified, unspecified, params.zeroForOne);
             specified.take(poolManager, address(this), specifiedAmount, true);
             unspecified.settle(poolManager, address(this), unspecifiedAmount, true);
 
@@ -295,19 +310,65 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
         return (IHooks.beforeSwap.selector, returnDelta, 0);
     }
 
-    
-    function getAmountOutFromExactInput(uint256 amountIn, Currency, Currency, bool)
+    function getAmountOutFromExactInput(uint256 amountIn, PoolId id, Currency, Currency, bool zeroForOne)
         internal
-        pure        
+        pure
         returns (uint256 amountOut)
     {
-        // in constant-sum curve, tokens trade exactly 1:1
-        amountOut = amountIn;
+        ReserveInfo memory info = ReserveInfo[id];
+
+        (uint160 sqrtPriceX96,,,) = poolManager.getR(poolId);
+
+        ImpermanentSwapParams memory _params = ImpermanentSwapParams({
+            amountCalculated: 0,
+            fictiveReserveIn: 0,
+            fictiveReserveOut: 0,
+            priceAverageIn: 0,
+            priceAverageOut: 0,
+            token0: token0,
+            token1: token1,
+            balanceIn: 0,
+            balanceOut: 0
+        });
+
+        if (zeroForOne) {
+            (
+                _params.balanceIn,
+                _params.balanceOut,
+                _params.fictiveReserveIn,
+                _params.fictiveReserveOut,
+                _params.priceAverageIn,
+                _params.priceAverageOut
+            ) = (
+                IERC20(_params.token0).balanceOf(address(this)) - feeToAmount0,
+                IERC20(_params.token1).balanceOf(address(this)) - feeToAmount1,
+                info.simulateReserve0,
+                info.simulateReserve1,
+                info.priceAvg0,
+                info.priceAvg1
+            );
+        } else {
+            (
+                _params.balanceIn,
+                _params.balanceOut,
+                _params.fictiveReserveIn,
+                _params.fictiveReserveOut,
+                _params.priceAverageIn,
+                _params.priceAverageOut
+            ) = (
+                IERC20(_params.token1).balanceOf(address(this)) - feeToAmount1,
+                IERC20(_params.token0).balanceOf(address(this)) - feeToAmount0,
+                info.simulateReserve1,
+                info.simulateReserve0,
+                info.priceAvg1,
+                info.priceAvg0,
+            );
+        }
     }
 
     function getAmountInForExactOutput(uint256 amountOut, Currency, Currency, bool)
         internal
-        pure        
+        pure
         returns (uint256 amountIn)
     {
         // in constant-sum curve, tokens trade exactly 1:1
@@ -386,7 +447,7 @@ contract ImpermanentWin is BaseHook, IUnlockCallback {
             ) * FixedPointMathLib.sqrt(FixedPoint96.Q96)
         ).toUint160();
 
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolId);
+        (uint160 sqrtPriceX96,,,) = poolManager.getSyncedReserves();
 
         poolManager.swap(
             key,
